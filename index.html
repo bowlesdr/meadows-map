@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meadows - Pods lots</title>
+<link rel="stylesheet" href="lib/leaflet.css">
+<style>
+  html, body { height: 100%; margin: 0; background: #1b1b1b; font: 14px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #map { position: absolute; inset: 0; }
+  .panel { background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+           padding: 6px 10px; color: #222; }
+  .title { font-weight: 600; font-size: 15px; }
+  .title small { display: block; font-weight: 400; font-size: 12px; color: #555; }
+  .search { display: flex; gap: 4px; padding: 6px; }
+  .search input { width: 180px; font: inherit; padding: 4px 6px; border: 1px solid #aaa; border-radius: 4px; }
+  .search button { font: inherit; padding: 4px 10px; border: 1px solid #888; border-radius: 4px; background: #f3f3f3; cursor: pointer; }
+  .search .msg { color: #b00; font-size: 12px; align-self: center; }
+  .legend div { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
+  .legend i { display: inline-block; width: 16px; height: 10px; }
+  .legend .ok { border: 2px solid #e8e870; background: rgba(0, 0, 0, 0.55); }
+  .legend .over { border: 2px solid #e8e870; background: #e63c28; }
+  .legend .mk { width: 12px; height: 12px; border-radius: 50%; background: #00aaff; border: 1px solid #000; }
+  .legend .sec { border: 2px solid #ff8c00; background: transparent; }
+  .legend .built { color: #666; font-size: 11px; margin-top: 4px; }
+  .leaflet-tooltip.tip, .leaflet-popup-content { font-size: 13px; line-height: 1.4; }
+  .leaflet-tooltip.tip { white-space: nowrap; }
+  .over-limit { color: #c62828; }
+  .mk-icon .dot { position: absolute; inset: 0; border-radius: 50%; background: #00aaff; border: 1px solid #000; box-sizing: border-box; }
+  .mk-icon .mlabel { position: absolute; left: 50%; bottom: 13px; transform: translateX(-50%); white-space: nowrap;
+            color: #fff; font-weight: 600; font-size: 11px; text-shadow: 0 0 3px #000, 0 0 3px #000; pointer-events: none; }
+  .hide-mlabels .mk-icon .mlabel { display: none; }
+  @media (max-width: 600px) { .search input { width: 120px; } .legend { display: none; } }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script src="lib/leaflet.js"></script>
+<script src="data/config.js"></script>
+<script src="data/pods.js"></script>
+<script src="data/sections.js"></script>
+<script src="data/markers.js"></script>
+<script src="data/lots.js"></script>
+<script>
+(function () {
+  const C = window.CONFIG, LIMIT = C.sideLimit;
+  const esc = s => String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
+  const num = (v, d) => (typeof v === 'number' ? v.toFixed(d) : '?');
+
+  // ---- what a hover / click shows (same content as the QGIS map tips)
+  function lotHtml(p) {
+    const over = p.side > LIMIT;
+    let h = `<b>Lot ${esc(p.id)}</b> (section ${esc(p.sec)}, row ${esc(p.row)}, col ${esc(p.col)})<br>` +
+            `Side slope: <b class="${over ? 'over-limit' : ''}">${num(p.side, 2)}°</b><br>` +
+            `End slope: ${num(p.end, 2)}°<br>` +
+            `Lot direction: ${Math.round(p.dir)}°, placed by: ${esc(p.placed)}`;
+    if (p.ma) {
+      h += `<br><b>Tape from ${esc(p.ma)} and ${esc(p.mb)}:</b>`;
+      for (const c of [p.c1, p.c2, p.c3, p.c4]) if (c) h += `<br>${esc(c)}`;
+    }
+    return h;
+  }
+  function markerHtml(p) {
+    return `<b>Marker ${esc(p.id)}</b> (${esc(p.placed)})<br>` +
+           `E ${num(p.e, 3)}, N ${num(p.nn, 3)}<br>` +
+           `Elevation ${num(p.z, 2)} m; used by ${esc(p.lots)} lots`;
+  }
+
+  // ---- map and base layers
+  const map = L.map('map', { preferCanvas: true, maxZoom: 23, zoomControl: true });
+  const imagery = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxNativeZoom: 18, maxZoom: 23, attribution: 'Imagery &copy; Esri' }).addTo(map);
+  const streets = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxNativeZoom: 19, maxZoom: 23, attribution: '&copy; OpenStreetMap contributors' });
+
+  map.createPane('markersPane').style.zIndex = 450;
+  const canvas = L.canvas({ tolerance: 0 });
+
+  // ---- layers
+  const pods = L.geoJSON(window.PODS, { interactive: false,
+    style: { color: '#ffffff', weight: 2, dashArray: '6 6', fill: false } }).addTo(map);
+  const sections = L.geoJSON(window.SECTIONS, { interactive: false,
+    style: { color: '#ff8c00', weight: 2.5, fill: false } });
+  const lotStyle = f => ({ renderer: canvas, color: '#ffff99', weight: 1, opacity: 0.9,
+    fill: true, fillColor: '#e63c28', fillOpacity: f.properties.side > LIMIT ? 0.75 : 0 });
+  const lots = L.geoJSON(window.LOTS, { style: lotStyle, renderer: canvas }).addTo(map);
+  const markers = L.geoJSON(window.MARKERS, {
+    // a fixed-size dot with its ID above it (HTML, so it stays 12 px at every zoom)
+    pointToLayer: (f, ll) => L.marker(ll, { pane: 'markersPane', icon: L.divIcon({ className: 'mk-icon', iconSize: [12, 12],
+      iconAnchor: [6, 6], html: `<span class="dot"></span><span class="mlabel">${esc(f.properties.id)}</span>` }) }),
+    onEachFeature: (f, layer) => {
+      layer.bindPopup(markerHtml(f.properties));
+      const tip = L.tooltip({ className: 'tip', direction: 'right', offset: [10, 0] }).setContent(markerHtml(f.properties));
+      layer.on('mouseover', () => { unhover(); tip.setLatLng(layer.getLatLng()); map.openTooltip(tip); });
+      layer.on('mouseout', () => map.closeTooltip(tip));
+    } }).addTo(map);
+
+  // ---- lot hover: one shared tooltip that follows the mouse, plus a highlight
+  const hoverTip = L.tooltip({ className: 'tip', direction: 'right', offset: [16, 0], opacity: 1 });
+  let hovered = null;
+  function unhover() {
+    if (hovered) { lots.resetStyle(hovered); hovered = null; }
+    map.closeTooltip(hoverTip);
+  }
+  lots.on('mouseover', e => {
+    const layer = e.propagatedFrom || e.layer;
+    if (hovered && hovered !== layer) lots.resetStyle(hovered);
+    hovered = layer;
+    layer.setStyle({ color: '#00e5ff', weight: 3 });
+    hoverTip.setLatLng(e.latlng).setContent(lotHtml(layer.feature.properties));
+    map.openTooltip(hoverTip);
+  });
+  lots.on('mousemove', e => hoverTip.setLatLng(e.latlng));
+  lots.on('mouseout', unhover);
+  lots.on('click', e => {           // click or tap pins the same information
+    const layer = e.propagatedFrom || e.layer;
+    unhover();
+    L.popup({ maxWidth: 360 }).setLatLng(e.latlng).setContent(lotHtml(layer.feature.properties)).openOn(map);
+  });
+
+  // ---- marker labels only when zoomed in close
+  const labelZoom = () => map.getContainer().classList.toggle('hide-mlabels', map.getZoom() < 19);
+  map.on('zoomend', labelZoom);
+
+  // ---- layer switcher, title, legend, search
+  L.control.layers({ 'Satellite': imagery, 'Streets': streets },
+                   { 'Lots': lots, 'Ground markers': markers, 'Sections': sections, 'Pod boundary': pods },
+                   { collapsed: true }).addTo(map);
+  L.control.scale({ imperial: true, metric: true }).addTo(map);
+
+  const nLots = window.LOTS.features.length, nOver = window.LOTS.features.filter(f => f.properties.side > LIMIT).length;
+  const titleCtl = L.control({ position: 'topright' });
+  titleCtl.onAdd = () => {
+    const d = L.DomUtil.create('div', 'panel title');
+    d.innerHTML = `${esc(C.title)}<small>${nLots.toLocaleString('en-US')} lots · ${window.MARKERS.features.length} ground markers · hover a lot for details</small>`;
+    return d;
+  };
+  titleCtl.addTo(map);
+
+  const legend = L.control({ position: 'bottomright' });
+  legend.onAdd = () => {
+    const d = L.DomUtil.create('div', 'panel legend');
+    d.innerHTML = `<div><i class="ok"></i>Lot, side slope ${LIMIT}° or less</div>` +
+                  `<div><i class="over"></i>Lot, side slope over ${LIMIT}° (${nOver})</div>` +
+                  `<div><i class="mk"></i>Ground marker</div>` +
+                  `<div class="built">Built ${esc(C.built)} from ${esc(C.source)}</div>`;
+    return d;
+  };
+  legend.addTo(map);
+
+  const lotById = new Map(), markerById = new Map();
+  lots.eachLayer(l => lotById.set(String(l.feature.properties.id), l));
+  markers.eachLayer(l => markerById.set(String(l.feature.properties.id).toUpperCase(), l));
+  const search = L.control({ position: 'topleft' });
+  search.onAdd = () => {
+    const d = L.DomUtil.create('div', 'panel search');
+    d.innerHTML = '<input type="search" placeholder="Lot number or marker (M109)"><button>Find</button><span class="msg"></span>';
+    L.DomEvent.disableClickPropagation(d); L.DomEvent.disableScrollPropagation(d);
+    const input = d.querySelector('input'), msg = d.querySelector('.msg');
+    const go = () => {
+      const q = input.value.trim().toUpperCase(); msg.textContent = '';
+      if (!q) return;
+      if (q.startsWith('M')) {
+        const m = markerById.get(q);
+        if (!m) { msg.textContent = 'not found'; return; }
+        map.setView(m.getLatLng(), 21);
+        L.popup().setLatLng(m.getLatLng()).setContent(markerHtml(m.feature.properties)).openOn(map);
+      } else {
+        const l = lotById.get(q.replace(/^LOT\s*/, ''));
+        if (!l) { msg.textContent = 'not found'; return; }
+        map.fitBounds(l.getBounds(), { maxZoom: 22 });
+        l.setStyle({ color: '#00e5ff', weight: 3 });
+        setTimeout(() => lots.resetStyle(l), 4000);
+        L.popup({ maxWidth: 360 }).setLatLng(l.getBounds().getCenter()).setContent(lotHtml(l.feature.properties)).openOn(map);
+      }
+    };
+    d.querySelector('button').addEventListener('click', go);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+    return d;
+  };
+  search.addTo(map);
+
+  map.fitBounds(lots.getBounds().pad(0.05));
+  labelZoom();
+})();
+</script>
+</body>
+</html>
