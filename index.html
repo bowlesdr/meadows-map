@@ -22,6 +22,11 @@
   .legend .over { border: 2px solid #e8e870; background: #e63c28; }
   .legend .mk { width: 12px; height: 12px; border-radius: 50%; background: #00aaff; border: 1px solid #000; }
   .legend .sec { border: 2px solid #ff8c00; background: transparent; }
+  .legend .ct { height: 0; border-top: 2px solid #ff9f43; }
+  /* Leaflet positions .clabel itself with a transform, so styling and centring go on the inner span */
+  .clabel span { position: absolute; left: 0; top: 0; transform: translate(-50%, -50%); white-space: nowrap;
+                 color: #ffd9a8; font-size: 11px; font-weight: 600; text-shadow: 0 0 3px #000, 0 0 3px #000; }
+  .hide-clabels .clabel { display: none; }
   .legend .built { color: #666; font-size: 11px; margin-top: 4px; }
   .leaflet-tooltip.tip, .leaflet-popup-content { font-size: 13px; line-height: 1.4; }
   .leaflet-tooltip.tip { white-space: nowrap; }
@@ -38,6 +43,7 @@
 <script src="lib/leaflet.js"></script>
 <script src="data/config.js"></script>
 <script src="data/pods.js"></script>
+<script src="data/contours.js"></script>
 <script src="data/sections.js"></script>
 <script src="data/markers.js"></script>
 <script src="data/lots.js"></script>
@@ -79,6 +85,25 @@
   // ---- layers
   const pods = L.geoJSON(window.PODS, { interactive: false,
     style: { color: '#ffffff', weight: 2, dashArray: '6 6', fill: false } }).addTo(map);
+  // contours under the lots: thin lines, every 5th (index) contour bold and labelled when zoomed in
+  const STEP = C.contourStep || 1;
+  const isIndex = e => Math.abs(e / (5 * STEP) - Math.round(e / (5 * STEP))) < 1e-6;
+  const elevText = e => `${Number.isInteger(e) ? e : e.toFixed(1)} m`;
+  // drawn above the lots (in their dense outlines they'd be lost) but ignoring the mouse, so lot hover still works
+  const cPane = map.createPane('contoursPane');
+  cPane.style.zIndex = 420; cPane.style.pointerEvents = 'none';
+  const contourLines = L.geoJSON(window.CONTOURS, { interactive: false, pane: 'contoursPane',
+    renderer: L.canvas({ pane: 'contoursPane' }),
+    style: f => ({ color: '#ff9f43', weight: isIndex(f.properties.elev) ? 1.8 : 0.8, opacity: 0.9 }) });
+  const contourLabels = L.layerGroup();
+  contourLines.eachLayer(l => {
+    if (!isIndex(l.feature.properties.elev)) return;
+    const parts = l.getLatLngs(), line = Array.isArray(parts[0]) ? parts.reduce((a, b) => (b.length > a.length ? b : a)) : parts;
+    if (line.length < 2) return;
+    L.marker(line[Math.floor(line.length / 2)], { interactive: false, keyboard: false,
+      icon: L.divIcon({ className: 'clabel', iconSize: [0, 0], html: `<span>${elevText(l.feature.properties.elev)}</span>` }) }).addTo(contourLabels);
+  });
+  const contours = L.layerGroup([contourLines, contourLabels]).addTo(map);
   const sections = L.geoJSON(window.SECTIONS, { interactive: false,
     style: { color: '#ff8c00', weight: 2.5, fill: false } });
   const lotStyle = f => ({ renderer: canvas, color: '#ffff99', weight: 1, opacity: 0.9,
@@ -119,12 +144,16 @@
   });
 
   // ---- marker labels only when zoomed in close
-  const labelZoom = () => map.getContainer().classList.toggle('hide-mlabels', map.getZoom() < 19);
+  const labelZoom = () => {
+    map.getContainer().classList.toggle('hide-mlabels', map.getZoom() < 19);
+    map.getContainer().classList.toggle('hide-clabels', map.getZoom() < 18);
+  };
   map.on('zoomend', labelZoom);
 
   // ---- layer switcher, title, legend, search
   L.control.layers({ 'Satellite': imagery, 'Streets': streets },
-                   { 'Lots': lots, 'Ground markers': markers, 'Sections': sections, 'Pod boundary': pods },
+                   { 'Lots': lots, 'Ground markers': markers, [`Contours (${elevText(STEP)})`]: contours,
+                     'Sections': sections, 'Pod boundary': pods },
                    { collapsed: true }).addTo(map);
   L.control.scale({ imperial: true, metric: true }).addTo(map);
 
@@ -143,6 +172,7 @@
     d.innerHTML = `<div><i class="ok"></i>Lot, side slope ${LIMIT}° or less</div>` +
                   `<div><i class="over"></i>Lot, side slope over ${LIMIT}° (${nOver})</div>` +
                   `<div><i class="mk"></i>Ground marker</div>` +
+                  (window.CONTOURS.features.length ? `<div><i class="ct"></i>Contour, every ${elevText(STEP)} (bold every ${elevText(5 * STEP)})</div>` : '') +
                   `<div class="built">Built ${esc(C.built)} from ${esc(C.source)}</div>`;
     return d;
   };
