@@ -79,6 +79,13 @@
   const streets = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxNativeZoom: 19, maxZoom: 23, attribution: '&copy; OpenStreetMap contributors' });
 
+  // local high-resolution orthophotos (make_tiles.py), drawn over the base map where they exist
+  const photoLayers = {};
+  for (const im of (C.imagery || [])) {
+    photoLayers[im.name] = L.tileLayer(im.url, { bounds: im.bounds, minZoom: im.minZoom, maxNativeZoom: im.maxZoom,
+      maxZoom: 23, attribution: esc(im.attribution) }).addTo(map);
+  }
+
   map.createPane('markersPane').style.zIndex = 450;
   const canvas = L.canvas({ tolerance: 0 });
 
@@ -152,7 +159,7 @@
 
   // ---- layer switcher, title, legend, search
   L.control.layers({ 'Satellite': imagery, 'Streets': streets },
-                   { 'Lots': lots, 'Ground markers': markers, [`Contours (${elevText(STEP)})`]: contours,
+                   { ...photoLayers, 'Lots': lots, 'Ground markers': markers, [`Contours (${elevText(STEP)})`]: contours,
                      'Sections': sections, 'Pod boundary': pods },
                    { collapsed: true }).addTo(map);
   L.control.scale({ imperial: true, metric: true }).addTo(map);
