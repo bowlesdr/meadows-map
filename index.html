@@ -67,7 +67,7 @@
     return h;
   }
   function markerHtml(p) {
-    return `<b>Marker ${esc(p.id)}</b> (${esc(p.placed)})<br>` +
+    return `<b>Survey point ${esc(p.id)}</b> (${esc(p.placed)})<br>` +
            `E ${num(p.e, 3)}, N ${num(p.nn, 3)}<br>` +
            `Elevation ${num(p.z, 2)} m; used by ${esc(p.lots)} lots`;
   }
@@ -150,7 +150,7 @@
     L.popup({ maxWidth: 360 }).setLatLng(e.latlng).setContent(lotHtml(layer.feature.properties)).openOn(map);
   });
 
-  // ---- marker labels only when zoomed in close
+  // ---- survey point labels only when zoomed in close
   const labelZoom = () => {
     map.getContainer().classList.toggle('hide-mlabels', map.getZoom() < 19);
     map.getContainer().classList.toggle('hide-clabels', map.getZoom() < 18);
@@ -159,7 +159,7 @@
 
   // ---- layer switcher, title, legend, search
   L.control.layers({ 'Satellite': imagery, 'Streets': streets },
-                   { ...photoLayers, 'Lots': lots, 'Ground markers': markers, [`Contours (${elevText(STEP)})`]: contours,
+                   { ...photoLayers, 'Lots': lots, 'Survey points': markers, [`Contours (${elevText(STEP)})`]: contours,
                      'Sections': sections, 'Pod boundary': pods },
                    { collapsed: true }).addTo(map);
   L.control.scale({ imperial: true, metric: true }).addTo(map);
@@ -168,7 +168,7 @@
   const titleCtl = L.control({ position: 'topright' });
   titleCtl.onAdd = () => {
     const d = L.DomUtil.create('div', 'panel title');
-    d.innerHTML = `${esc(C.title)}<small>${nLots.toLocaleString('en-US')} lots · ${window.MARKERS.features.length} ground markers · hover a lot for details</small>`;
+    d.innerHTML = `${esc(C.title)}<small>${nLots.toLocaleString('en-US')} lots · ${window.MARKERS.features.length} survey points · hover a lot for details</small>`;
     return d;
   };
   titleCtl.addTo(map);
@@ -178,7 +178,7 @@
     const d = L.DomUtil.create('div', 'panel legend');
     d.innerHTML = `<div><i class="ok"></i>Lot, side slope ${LIMIT}° or less</div>` +
                   `<div><i class="over"></i>Lot, side slope over ${LIMIT}° (${nOver})</div>` +
-                  `<div><i class="mk"></i>Ground marker</div>` +
+                  `<div><i class="mk"></i>Survey point</div>` +
                   (window.CONTOURS.features.length ? `<div><i class="ct"></i>Contour, every ${elevText(STEP)} (bold every ${elevText(5 * STEP)})</div>` : '') +
                   `<div class="built">Built ${esc(C.built)} from ${esc(C.source)}</div>`;
     return d;
@@ -191,14 +191,14 @@
   const search = L.control({ position: 'topleft' });
   search.onAdd = () => {
     const d = L.DomUtil.create('div', 'panel search');
-    d.innerHTML = '<input type="search" placeholder="Lot number or marker (M109)"><button>Find</button><span class="msg"></span>';
+    d.innerHTML = '<input type="search" placeholder="Lot number or survey point (SP109)"><button>Find</button><span class="msg"></span>';
     L.DomEvent.disableClickPropagation(d); L.DomEvent.disableScrollPropagation(d);
     const input = d.querySelector('input'), msg = d.querySelector('.msg');
     const go = () => {
       const q = input.value.trim().toUpperCase(); msg.textContent = '';
       if (!q) return;
-      if (q.startsWith('M')) {
-        const m = markerById.get(q);
+      if (/^SP\s*\d/.test(q)) {
+        const m = markerById.get(q.replace(/\s+/g, ''));
         if (!m) { msg.textContent = 'not found'; return; }
         map.setView(m.getLatLng(), 21);
         L.popup().setLatLng(m.getLatLng()).setContent(markerHtml(m.feature.properties)).openOn(map);
